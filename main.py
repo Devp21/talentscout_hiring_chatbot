@@ -6,6 +6,10 @@ from datetime import datetime
 from groq import Groq
 from textblob import TextBlob
 import time
+from dotenv import load_dotenv
+
+# Load dotenv
+load_dotenv()
 
 # Configure page
 st.set_page_config(
@@ -68,11 +72,67 @@ st.markdown("""
         margin-left: 10px;
     }
     
-    .positive { background-color: #d4edda; color: #155724; }
+    .confident { background-color: #d4edda; color: #155724; }
     .neutral { background-color: #fff3cd; color: #856404; }
-    .negative { background-color: #f8d7da; color: #721c24; }
+    .not_confident { background-color: #f8d7da; color: #721c24; }
 </style>
 """, unsafe_allow_html=True)
+
+# Place this at the top, before translations and t()
+supported_languages = {
+    'English': 'en',
+    'Spanish': 'es',
+    'French': 'fr',
+    'German': 'de',
+    'Hindi': 'hi',
+    'Chinese': 'zh'
+}
+
+translations = {
+    'en': {
+        'consent_title': "📋 Data Consent & Privacy Notice",
+        'welcome': "Welcome to TalentScout's AI Hiring Assistant!",
+        'consent_continue': "✅ I Consent & Continue",
+        'consent_decline': "❌ I Do Not Consent",
+        'form_title': "📝 Candidate Information Form",
+        'full_name': "Full Name *",
+        'email': "Email Address *",
+        'phone': "Phone Number *",
+        'experience': "Years of Experience *",
+        'position': "Desired Position *",
+        'location': "Current Location *",
+        'tech_stack': "Tech Stack *",
+        'submit': "Submit & Start Interview",
+        'answer_placeholder': "Type your answer here...",
+        'submit_answer': "Submit Answer",
+        'end_interview': "End Interview",
+        # ...add all other UI strings
+    },
+    'es': {
+        'consent_title': "📋 Consentimiento de Datos y Aviso de Privacidad",
+        'welcome': "¡Bienvenido al Asistente de Contratación de TalentScout!",
+        'consent_continue': "✅ Consiento y Continuar",
+        'consent_decline': "❌ No Consiento",
+        'form_title': "📝 Formulario de Información del Candidato",
+        'full_name': "Nombre completo *",
+        'email': "Correo electrónico *",
+        'phone': "Número de teléfono *",
+        'experience': "Años de experiencia *",
+        'position': "Puesto deseado *",
+        'location': "Ubicación actual *",
+        'tech_stack': "Stack tecnológico *",
+        'submit': "Enviar y comenzar entrevista",
+        'answer_placeholder': "Escribe tu respuesta aquí...",
+        'submit_answer': "Enviar respuesta",
+        'end_interview': "Terminar entrevista",
+        # ...add all other UI strings
+    },
+    # Add more languages...
+}
+
+def t(key):
+    lang_code = supported_languages[st.session_state.language]
+    return translations.get(lang_code, translations['en']).get(key, key)
 
 class HiringAssistant:
     def __init__(self):
@@ -100,9 +160,9 @@ class HiringAssistant:
             polarity = blob.sentiment.polarity
             
             if polarity > 0.1:
-                return "positive", "😊"
+                return "confident", "💪"
             elif polarity < -0.1:
-                return "negative", "😟"
+                return "not_confident", "😟"
             else:
                 return "neutral", "😐"
         except:
@@ -119,45 +179,60 @@ class HiringAssistant:
         cleaned_phone = re.sub(r'[^\d\+]', '', phone)
         return len(cleaned_phone) >= 10 and len(cleaned_phone) <= 15
     
-    def generate_technical_questions(self, tech_stack, experience_level):
-        """Generate technical questions based on tech stack"""
+    def generate_technical_questions(self, tech_stack, experience_level, language='English'):
+        """Generate technical questions based on tech stack and language"""
         try:
             if not self.groq_client:
                 if not self.initialize_groq():
                     return self.get_fallback_questions(tech_stack)
-            
+
+            # Improved prompt for more reliable output
             prompt = f"""
-            You are an experienced technical interviewer. Generate exactly 4 technical questions for a candidate with the following profile:
-            
-            Tech Stack: {tech_stack}
-            Experience Level: {experience_level} years
-            
-            Requirements:
-            - 2 Easy questions (fundamental concepts)
-            - 1 Medium question (practical application)
-            - 1 Hard question (advanced concepts or problem-solving)
-            
-            Format each question as:
-            DIFFICULTY: [Easy/Medium/Hard]
-            QUESTION: [The actual question]
-            
-            Make questions specific to their tech stack and appropriate for their experience level.
-            Focus on practical knowledge and real-world scenarios.
-            """
-            
+You are an expert technical interviewer. Generate exactly 4 technical interview questions for a candidate with the following profile:
+
+Tech Stack: {tech_stack}
+Experience Level: {experience_level} years
+
+Respond ONLY in {language}.
+
+CRITICAL INSTRUCTIONS:
+- Output ONLY the questions, no introduction or summary.
+- Each question must be on a new line, and follow this format:
+  DIFFICULTY: [Easy/Medium/Hard]
+  QUESTION: [The actual question]
+- The first two questions must be Easy, the third Medium, the fourth Hard.
+- Make each question specific to the tech stack and experience level.
+- Do NOT include any explanations, just the 4 questions in the required format.
+
+Example:
+DIFFICULTY: Easy
+QUESTION: What is a Python list and how do you use it?
+DIFFICULTY: Easy
+QUESTION: How do you create a virtual environment in Python?
+DIFFICULTY: Medium
+QUESTION: How would you use Django ORM to perform a database migration?
+DIFFICULTY: Hard
+QUESTION: Explain how you would optimize a Django REST API for high concurrency.
+"""
+
             response = self.groq_client.chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
                 model="llama3-8b-8192",
-                temperature=0.7,
-                max_tokens=1000
+                temperature=0.3,
+                max_tokens=800
             )
-            
+
+            # Robust parsing: Only accept if exactly 4 questions are found
             questions = self.parse_questions(response.choices[0].message.content)
-            if not questions or len(questions) < 4:
-                st.warning("Generated fewer questions than expected. Using fallback questions.")
+            if not questions or len(questions) != 4:
+                st.warning("Generated an incorrect number of questions. Using fallback questions.")
+                return self.get_fallback_questions(tech_stack)
+            # Ensure order: 2 Easy, 1 Medium, 1 Hard
+            difficulties = [q['difficulty'].lower() for q in questions]
+            if difficulties != ['easy', 'easy', 'medium', 'hard']:
+                st.warning("Questions did not match required difficulty order. Using fallback questions.")
                 return self.get_fallback_questions(tech_stack)
             return questions
-            
         except Exception as e:
             st.error(f"Error generating questions: {e}")
             return self.get_fallback_questions(tech_stack)
@@ -204,8 +279,8 @@ class HiringAssistant:
             }
         ]
     
-    def evaluate_answer(self, question, answer, tech_stack):
-        """Evaluate candidate's answer using Groq"""
+    def evaluate_answer(self, question, answer, tech_stack, language='English'):
+        """Evaluate candidate's answer using Groq and language"""
         if not self.groq_client or not answer.strip():
             return False, "Please provide a more detailed answer."
             
@@ -217,16 +292,11 @@ class HiringAssistant:
             Answer: {answer}
             Candidate's Tech Stack: {tech_stack}
             
-            Evaluate if this answer demonstrates:
-            1. Basic understanding of the concept
-            2. Relevant technical knowledge
-            3. Clear communication
+            Respond in {language}.
             
-            Respond with either:
-            - "ADEQUATE" if the answer shows reasonable understanding
-            - "NEEDS_CLARIFICATION" if the answer is vague, incomplete, or shows lack of understanding
-            
-            Then provide a brief explanation in 1-2 sentences.
+            Instructions:
+            - On the FIRST LINE, write only ADEQUATE or NEEDS_CLARIFICATION (no other text).
+            - On the SECOND LINE, provide a brief explanation (1-2 sentences).
             """
             
             response = self.groq_client.chat.completions.create(
@@ -237,12 +307,12 @@ class HiringAssistant:
             )
             
             evaluation = response.choices[0].message.content.strip()
-            
-            if "ADEQUATE" in evaluation.upper():
+            first_line = evaluation.splitlines()[0].strip().upper()
+            if first_line == "ADEQUATE":
                 return True, "Good answer! Moving to the next question."
             else:
                 return False, "Could you please elaborate more on your answer or provide more specific details?"
-                
+            
         except Exception as e:
             # Fallback evaluation
             if len(answer.strip()) < 20:
@@ -284,6 +354,13 @@ def main():
     
     assistant = HiringAssistant()
     
+    # Multilingual support: Add language selector
+    if 'language' not in st.session_state:
+        st.session_state.language = 'English'
+    st.sidebar.markdown('### 🌐 Language')
+    st.session_state.language = st.sidebar.selectbox('Select your language:', list(supported_languages.keys()), index=0)
+    selected_language = st.session_state.language
+    
     # Header
     st.markdown("""
     <div class="main-header">
@@ -294,82 +371,74 @@ def main():
     
     # Consent Stage
     if st.session_state.stage == 'consent':
-        st.markdown("""
-        <div class="form-container">
-            <h2>📋 Data Consent & Privacy Notice</h2>
-            <p><strong>Welcome to TalentScout's AI Hiring Assistant!</strong></p>
-            
-            <p>Before we begin, please note that:</p>
-            <ul>
-                <li>✅ All your data will be stored locally and securely</li>
-                <li>✅ We comply with GDPR and data privacy standards</li>
-                <li>✅ Your information will only be used for recruitment purposes</li>
-                <li>✅ You can end the interview at any time by typing 'end', 'quit', or 'stop'</li>
-                <li>✅ We use sentiment analysis to ensure a positive interview experience</li>
-            </ul>
-            
-            <p><em>By proceeding, you consent to the collection and processing of your data for recruitment purposes.</em></p>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(f"""
+        ## {t('consent_title')}
+        **{t('welcome')}**
+        
+        **Before we begin, please note that:**
+        - ✅ All your data will be stored locally and securely
+        - ✅ We comply with GDPR and data privacy standards
+        - ✅ Your information will only be used for recruitment purposes
+        - ✅ You can end the interview at any time by typing 'end', 'quit', or 'stop'
+        - ✅ We use sentiment analysis to ensure a positive interview experience
+        
+        *By proceeding, you consent to the collection and processing of your data for recruitment purposes.*
+        """)
         
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
-            if st.button("✅ I Consent & Continue", use_container_width=True, type="primary"):
+            if st.button(t('consent_continue'), use_container_width=True, type="primary"):
                 st.session_state.stage = 'form'
                 st.session_state.chat_history.append({
                     "type": "bot",
                     "message": "Thank you for your consent! Let's start by collecting some basic information about you.",
                     "timestamp": datetime.now()
                 })
-                st.rerun()
+            st.rerun()
             
-            if st.button("❌ I Do Not Consent", use_container_width=True):
+            if st.button(t('consent_decline'), use_container_width=True):
                 st.error("We respect your decision. Thank you for your time!")
                 st.stop()
     
     # Form Stage
     elif st.session_state.stage == 'form':
-        st.markdown("""
-        <div class="form-container">
-            <h2>📝 Candidate Information Form</h2>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(f"## {t('form_title')}")
         
         with st.form("candidate_form"):
             col1, col2 = st.columns(2)
             
             with col1:
-                full_name = st.text_input("Full Name *", placeholder="Enter your full name")
-                email = st.text_input("Email Address *", placeholder="your.email@example.com")
-                phone = st.text_input("Phone Number *", placeholder="+1234567890")
-                experience = st.selectbox("Years of Experience *", 
+                full_name = st.text_input(t('full_name'), placeholder=t('full_name'))
+                email = st.text_input(t('email'), placeholder=t('email'))
+                phone = st.text_input(t('phone'), placeholder=t('phone'))
+                experience = st.selectbox(t('experience'), 
                                         options=["0-1", "1-3", "3-5", "5-8", "8-12", "12+"])
             
             with col2:
-                position = st.text_input("Desired Position *", placeholder="e.g., Software Engineer, Data Scientist")
-                location = st.text_input("Current Location *", placeholder="City, Country")
-                tech_stack = st.text_area("Tech Stack *", 
-                                         placeholder="List your technical skills (e.g., Python, React, AWS, PostgreSQL)",
+                position = st.text_input(t('position'), placeholder=t('position'))
+                location = st.text_input(t('location'), placeholder=t('location'))
+                tech_stack = st.text_area(t('tech_stack'), 
+                                         placeholder=t('tech_stack'),
                                          height=100)
             
-            submitted = st.form_submit_button("Submit & Start Interview", use_container_width=True, type="primary")
+            submitted = st.form_submit_button(t('submit'), use_container_width=True, type="primary")
             
             if submitted:
                 # Validation
                 errors = []
                 
                 if not full_name.strip():
-                    errors.append("Full name is required")
+                    errors.append(t('full_name'))
                 if not email.strip() or not assistant.validate_email(email):
-                    errors.append("Valid email address is required")
+                    errors.append(t('email'))
                 if not phone.strip() or not assistant.validate_phone(phone):
-                    errors.append("Valid phone number is required")
+                    errors.append(t('phone'))
                 if not position.strip():
-                    errors.append("Desired position is required")
+                    errors.append(t('position'))
                 if not location.strip():
-                    errors.append("Current location is required")
+                    errors.append(t('location'))
                 if not tech_stack.strip():
-                    errors.append("Tech stack is required")
+                    errors.append(t('tech_stack'))
                 
                 if errors:
                     for error in errors:
@@ -391,31 +460,38 @@ def main():
                     with st.spinner("Generating personalized technical questions..."):
                         exp_years = experience.split('-')[0] if '-' in experience else experience.replace('+', '')
                         st.session_state.questions = assistant.generate_technical_questions(
-                            tech_stack, exp_years
+                            tech_stack, exp_years, language=selected_language
                         )
                     
                     st.session_state.stage = 'interview'
                     st.session_state.chat_history.append({
                         "type": "bot",
-                        "message": f"Hello {full_name}! Thank you for providing your information. I've prepared 4 technical questions based on your tech stack: {tech_stack}. Let's begin the technical interview!",
+                        "message": f"Hello {full_name}! Thank you for providing your information for the {position} position. I've prepared 4 technical questions based on your tech stack: {tech_stack}. Let's begin the technical interview!",
                         "timestamp": datetime.now()
                     })
                     st.success("✅ Information saved! Starting technical interview...")
                     time.sleep(2)
-                    st.rerun()
-    
+                st.rerun()
+            
     # Interview Stage
     elif st.session_state.stage == 'interview':
         # Chat History Display
         st.markdown('<div class="chat-container">', unsafe_allow_html=True)
         
+        sentiment_labels = {
+            "confident": "Confident",
+            "neutral": "Neutral",
+            "not_confident": "Not Confident"
+        }
+        
         for chat in st.session_state.chat_history:
             if chat["type"] == "user":
                 sentiment, emoji = assistant.analyze_sentiment(chat["message"])
+                label = sentiment_labels.get(sentiment, sentiment.capitalize())
                 st.markdown(f"""
                 <div class="user-message">
                     <strong>You:</strong> {chat["message"]}
-                    <span class="sentiment-indicator {sentiment}">{emoji} {sentiment}</span>
+                    <span class="sentiment-indicator {sentiment}">{emoji} {label}</span>
                 </div>
                 """, unsafe_allow_html=True)
             else:
@@ -435,7 +511,7 @@ def main():
                     tech_stack = st.session_state.candidate_data.get('tech_stack', '')
                     
                     # First try with Groq
-                    questions = assistant.generate_technical_questions(tech_stack, exp_years)
+                    questions = assistant.generate_technical_questions(tech_stack, exp_years, language=selected_language)
                     
                     if not questions or len(questions) < 4:
                         # If Groq fails, use fallback questions
@@ -468,15 +544,16 @@ def main():
                 [{current_q['difficulty']}]
                 </span></h3>
                 <p><strong>{current_q['question']}</strong></p>
+                <p><em>({st.session_state.candidate_data.get('full_name', 'Candidate')}, this question is tailored for your experience in {st.session_state.candidate_data.get('tech_stack', 'technology')})</em></p>
             </div>
             """, unsafe_allow_html=True)
             
             # Answer Input
-            user_input = st.text_area("Your Answer:", placeholder="Type your answer here...", height=100, key=f"answer_{st.session_state.current_question}")
+            user_input = st.text_area(t('answer_placeholder'), placeholder=t('answer_placeholder'), height=100, key=f"answer_{st.session_state.current_question}")
             
             col1, col2 = st.columns([3, 1])
             with col1:
-                if st.button("Submit Answer", use_container_width=True, type="primary"):
+                if st.button(t('submit_answer'), use_container_width=True, type="primary"):
                     if user_input.strip().lower() in ['end', 'quit', 'stop', 'exit']:
                         st.session_state.stage = 'ended'
                         st.session_state.chat_history.append({
@@ -503,7 +580,8 @@ def main():
                         is_adequate, feedback = assistant.evaluate_answer(
                             current_q['question'], 
                             user_input, 
-                            st.session_state.candidate_data['tech_stack']
+                            st.session_state.candidate_data['tech_stack'],
+                            language=selected_language
                         )
                         
                         if is_adequate:
@@ -528,15 +606,15 @@ def main():
                         st.warning("Please provide an answer before submitting.")
             
             with col2:
-                if st.button("End Interview", use_container_width=True, type="secondary"):
+                if st.button(t('end_interview'), use_container_width=True, type="secondary"):
                     st.session_state.stage = 'ended'
                     st.session_state.chat_history.append({
                         "type": "bot",
                         "message": "Thank you for your time! The interview has been ended. Someone from our team will contact you regarding the next steps.",
                         "timestamp": datetime.now()
                     })
-                    st.rerun()
-        
+        st.rerun()
+    
         # Progress Bar
         if st.session_state.questions:  # Only show progress if questions exist
             progress = st.session_state.current_question / len(st.session_state.questions)
@@ -600,11 +678,11 @@ def main():
             <h2>👋 Interview Ended</h2>
             <p><strong>Thank you for your time!</strong></p>
             
-            <p>Your responses have been saved and someone from our team will contact you regarding the next steps.</p>
-            
-            <p><em>We appreciate your interest in our opportunities!</em></p>
+            Your responses have been saved and someone from our team will contact you regarding the next steps.
+
+            *We appreciate your interest in our opportunities!*
         </div>
-        """, unsafe_allow_html=True)
+        """)
         
         if saved:
             st.success("✅ Your responses have been saved successfully!")
@@ -630,7 +708,7 @@ def main():
         - All data is stored locally and securely
         
         **Features:**
-        - 😊 Sentiment analysis
+        - 💪 Sentiment analysis
         - 🎯 Personalized questions
         - 🔒 Secure data handling
         - 📱 Responsive design
