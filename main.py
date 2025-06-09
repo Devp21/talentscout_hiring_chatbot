@@ -286,7 +286,7 @@ QUESTION: Explain how you would optimize a Django REST API for high concurrency.
             
         try:
             prompt = f"""
-            You are a technical interviewer evaluating a candidate's answer.
+            You are a technical interviewer evaluating a candidate's answer to a technical question.
             
             Question: {question}
             Answer: {answer}
@@ -295,8 +295,11 @@ QUESTION: Explain how you would optimize a Django REST API for high concurrency.
             Respond in {language}.
             
             Instructions:
-            - On the FIRST LINE, write only ADEQUATE or NEEDS_CLARIFICATION (no other text).
-            - On the SECOND LINE, provide a brief explanation (1-2 sentences).
+            - On the FIRST LINE, write ONLY one of the following: ADEQUATE, NEEDS_CLARIFICATION, or IRRELEVANT.
+            - On the SECOND LINE, provide a brief explanation (1-2 sentences) for your evaluation.
+            - An answer is ADEQUATE if it is technically correct, complete, and directly answers the question.
+            - An answer NEEDS_CLARIFICATION if it is partially correct, vague, incomplete, or requires more detail.
+            - An answer is IRRELEVANT if it does not address the question asked at all.
             """
             
             response = self.groq_client.chat.completions.create(
@@ -308,16 +311,20 @@ QUESTION: Explain how you would optimize a Django REST API for high concurrency.
             
             evaluation = response.choices[0].message.content.strip()
             first_line = evaluation.splitlines()[0].strip().upper()
+            
             if first_line == "ADEQUATE":
                 return True, "Good answer! Moving to the next question."
+            elif first_line == "IRRELEVANT":
+                return False, "Your answer does not seem to be relevant to the question. Could you please provide a relevant answer?"
             else:
                 return False, "Could you please elaborate more on your answer or provide more specific details?"
             
         except Exception as e:
-            # Fallback evaluation
-            if len(answer.strip()) < 20:
-                return False, "Please provide a more detailed answer."
-            return True, "Thank you for your answer."
+            # Fallback evaluation for API errors or unexpected responses
+            st.warning(f"API evaluation failed: {e}. Falling back to basic validation.")
+            if len(answer.strip()) < 50 or "not sure" in answer.lower() or "don't know" in answer.lower(): # Increased minimum length and added keyword checks
+                return False, "Your answer is too short or indicates uncertainty. Please provide a more detailed and relevant response."
+            return True, "Thank you for your answer. We will proceed with this, but please try to be more detailed in future responses."
     
     def save_candidate_data(self, data):
         """Save candidate data locally"""
