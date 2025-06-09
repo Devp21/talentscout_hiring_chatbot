@@ -8,7 +8,14 @@ The TalentScout AI Hiring Assistant is a Streamlit-based application designed to
 
 *   **Multilingual Support:** Conducts interviews in multiple languages, including English, Spanish, French, German, Hindi, and Chinese, for both UI and LLM responses.
 *   **Personalized Technical Questions:** Generates exactly 4 technical questions (2 Easy, 1 Medium, 1 Hard) tailored to the candidate's specified tech stack and years of experience.
-*   **Real-time Answer Evaluation:** Utilizes Groq's LLM to evaluate candidate answers for adequacy and provides constructive feedback.
+*   **Intelligent Answer Evaluation:** Uses LLM to evaluate answers as ADEQUATE, NEEDS_CLARIFICATION, or IRRELEVANT, with clear criteria for each category:
+    - ADEQUATE: Technically correct, complete, and well-explained answers
+    - NEEDS_CLARIFICATION: Partially correct but incomplete answers
+    - IRRELEVANT: Off-topic or incorrect answers
+*   **Input Validation:** Performs thorough validation of answers before evaluation, checking for:
+    - Blank or very short responses
+    - Gibberish or repeated characters
+    - Insufficient technical detail
 *   **Sentiment Analysis:** Analyzes the sentiment of candidate responses during the interview to provide insights into their confidence level.
 *   **Context Handling:** Maintains the flow and context of the conversation to ensure a coherent and seamless user experience throughout the interview.
 *   **Fallback Mechanism:** Provides meaningful responses and alternative questions when the LLM does not understand user input or encounters unexpected issues, ensuring a robust interaction.
@@ -91,6 +98,30 @@ This project is developed using Python and leverages the following key libraries
 *   **llama3-8b-8192:** The specific pre-trained LLM model from Groq used for generating technical questions and evaluating candidate answers.
 *   **textblob:** For sentiment analysis of user responses.
 *   **python-dotenv:** For managing environment variables securely.
+
+## Answer Evaluation System
+
+The application uses a sophisticated answer evaluation system that:
+
+1. **Pre-evaluation Validation:**
+   - Checks for blank or very short responses
+   - Detects gibberish or repeated characters
+   - Ensures sufficient technical detail
+
+2. **LLM-based Evaluation:**
+   - Evaluates answers as ADEQUATE, NEEDS_CLARIFICATION, or IRRELEVANT
+   - Provides specific feedback for each evaluation type
+   - Uses clear criteria for each evaluation category
+
+3. **Retry Mechanism:**
+   - Allows up to 2 attempts for each question
+   - Provides constructive feedback for improvement
+   - Automatically progresses after 2 failed attempts
+
+4. **Progress Tracking:**
+   - Maintains question progression state
+   - Tracks evaluation history
+   - Stores final evaluation results
 
 ## Prompt Design
 
