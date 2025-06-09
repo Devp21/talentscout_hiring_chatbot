@@ -7,6 +7,7 @@ from groq import Groq
 from textblob import TextBlob
 import time
 from dotenv import load_dotenv
+from typing import Dict
 
 # Load dotenv
 load_dotenv()
@@ -279,12 +280,39 @@ QUESTION: Explain how you would optimize a Django REST API for high concurrency.
             }
         ]
     
+    def validate_user_input(self, user_input: str) -> Dict:
+        """Validate user input and determine if it needs clarification"""
+        input_length = len(user_input.strip())
+        word_count = len(user_input.strip().split())
+        
+        # Check for blank or very short responses
+        if input_length == 0:
+            return {"valid": False, "reason": "blank", "message": "I didn't receive any input from you. Could you please provide an answer?"}
+        
+        if input_length < 3:
+            return {"valid": False, "reason": "too_short", "message": "Your response seems very brief. Could you please provide more details?"}
+            
+        # Check for gibberish or repeated characters
+        if len(set(user_input.lower())) < 3 and input_length > 5:
+            return {"valid": False, "reason": "gibberish", "message": "I'm having trouble understanding your response. Could you please rephrase it?"}
+            
+        # Check for very short answers in technical questions
+        if word_count < 3:
+            return {"valid": False, "reason": "insufficient_detail", "message": "Your technical answer seems quite brief. Could you provide more detail or explanation?"}
+            
+        return {"valid": True, "reason": "good", "message": ""}
+
     def evaluate_answer(self, question, answer, tech_stack, language='English'):
         """Evaluate candidate's answer using Groq and language"""
-        if not self.groq_client or not answer.strip():
-            return False, "Please provide a more detailed answer."
+        if not self.groq_client:
+            return False, "Please provide a more detailed answer.", 0, "ERROR"
             
         try:
+            # First validate the input
+            validation = self.validate_user_input(answer)
+            if not validation["valid"]:
+                return False, validation["message"], 0, "NEEDS_CLARIFICATION"
+
             prompt = f"""
             You are a technical interviewer evaluating a candidate's answer to a technical question.
             
@@ -294,52 +322,202 @@ QUESTION: Explain how you would optimize a Django REST API for high concurrency.
             
             Respond in {language}.
             
-            Instructions:
-            - On the FIRST LINE, write ONLY one of the following: ADEQUATE, NEEDS_CLARIFICATION, or IRRELEVANT.
-            - On the SECOND LINE, provide a brief explanation (1-2 sentences) for your evaluation.
-            - An answer is ADEQUATE if it is technically correct, complete, and directly answers the question.
-            - An answer NEEDS_CLARIFICATION if it is partially correct, vague, incomplete, or requires more detail.
-            - An answer is IRRELEVANT if it does not address the question asked at all.
+            CRITICAL INSTRUCTIONS:
+            Evaluate the answer and respond with EXACTLY one of these three evaluations:
+            
+            1. ADEQUATE - If the answer is:
+               - Technically correct
+               - Complete and well-explained
+               - Directly addresses the question
+               - Shows good understanding of the concept
+            
+            2. NEEDS_CLARIFICATION - If the answer is:
+               - Partially correct but incomplete
+               - Vague or lacks specific details
+               - Needs more technical depth
+               - Could benefit from examples
+            
+            3. IRRELEVANT - If the answer:
+               - Does not address the question
+               - Is completely off-topic
+               - Shows no understanding of the concept
+            
+            Format your response EXACTLY as follows (no other text):
+            EVALUATION: [ADEQUATE/NEEDS_CLARIFICATION/IRRELEVANT]
+            FEEDBACK: [1-2 sentences explaining your evaluation]
+            
+            Example for ADEQUATE:
+            EVALUATION: ADEQUATE
+            FEEDBACK: Excellent answer demonstrating clear understanding of the concept with good technical details.
+            
+            Example for NEEDS_CLARIFICATION:
+            EVALUATION: NEEDS_CLARIFICATION
+            FEEDBACK: The answer is on the right track but needs more specific technical details and examples.
+            
+            Example for IRRELEVANT:
+            EVALUATION: IRRELEVANT
+            FEEDBACK: The answer does not address the technical question asked.
             """
             
             response = self.groq_client.chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
                 model="llama3-8b-8192",
-                temperature=0.3,
+                temperature=0.1,  # Lower temperature for more consistent output
                 max_tokens=200
             )
             
-            evaluation = response.choices[0].message.content.strip()
-            first_line = evaluation.splitlines()[0].strip().upper()
+            raw_evaluation_text = response.choices[0].message.content.strip()
+            evaluation_lines = raw_evaluation_text.splitlines()
             
-            if first_line == "ADEQUATE":
-                return True, "Good answer! Moving to the next question."
-            elif first_line == "IRRELEVANT":
-                return False, "Your answer does not seem to be relevant to the question. Could you please provide a relevant answer?"
-            else:
-                return False, "Could you please elaborate more on your answer or provide more specific details?"
+            # Initialize variables
+            evaluation_type = ""
+            feedback_message = ""
+            
+            # Parse each line
+            for line in evaluation_lines:
+                line = line.strip()
+                if line.startswith("EVALUATION:"):
+                    evaluation_type = line.replace("EVALUATION:", "").strip().upper()
+                elif line.startswith("FEEDBACK:"):
+                    feedback_message = line.replace("FEEDBACK:", "").strip()
+
+            # Determine if answer is adequate based on evaluation type
+            is_adequate = (evaluation_type == "ADEQUATE")
+            
+            # Provide default feedback if none extracted
+            if not feedback_message:
+                if evaluation_type == "ADEQUATE":
+                    feedback_message = "Good answer! Moving to the next question."
+                elif evaluation_type == "NEEDS_CLARIFICATION":
+                    feedback_message = "Could you please provide more technical details or examples?"
+                else:
+                    feedback_message = "Your answer doesn't seem to address the question. Could you please try again?"
+
+            return is_adequate, feedback_message, 0, evaluation_type
             
         except Exception as e:
-            # Fallback evaluation for API errors or unexpected responses
-            st.warning(f"API evaluation failed: {e}. Falling back to basic validation.")
-            if len(answer.strip()) < 50 or "not sure" in answer.lower() or "don't know" in answer.lower(): # Increased minimum length and added keyword checks
-                return False, "Your answer is too short or indicates uncertainty. Please provide a more detailed and relevant response."
-            return True, "Thank you for your answer. We will proceed with this, but please try to be more detailed in future responses."
+            st.error(f"Error evaluating answer: {e}")
+            return False, "An error occurred while evaluating your answer. Please try again.", 0, "ERROR"
+
+    def process_answer(self, question, answer, tech_stack, language='English'):
+        """Process the answer and determine next steps"""
+        is_adequate, feedback, _, evaluation_type = self.evaluate_answer(question, answer, tech_stack, language)
+        return is_adequate, feedback, 0, evaluation_type
     
     def save_candidate_data(self, data):
         """Save candidate data locally"""
         try:
-            filename = f"candidate_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            # Generate unique ID for the candidate
+            candidate_id = f"{int(time.time())}_{data.get('email', '').split('@')[0]}"
             
-            # Create data directory if it doesn't exist
-            os.makedirs("candidate_data", exist_ok=True)
+            # Create date-based directory structure
+            current_date = datetime.now().strftime('%Y-%m-%d')
+            base_dir = "data"
+            candidates_dir = os.path.join(base_dir, "candidates", current_date)
+            analytics_dir = os.path.join(base_dir, "analytics")
+            backup_dir = os.path.join(base_dir, "backups", current_date)
             
-            filepath = os.path.join("candidate_data", filename)
+            # Create directories if they don't exist
+            for directory in [candidates_dir, analytics_dir, backup_dir]:
+                os.makedirs(directory, exist_ok=True)
             
-            with open(filepath, 'w') as f:
-                json.dump(data, f, indent=2)
+            # Calculate analytics first
+            user_messages = [chat for chat in data.get("chat_history", []) if chat["type"] == "user"]
+            total_user_messages = len(user_messages)
             
-            return True, filepath
+            # Calculate average answer length
+            avg_answer_length = sum(
+                len(chat["message"])
+                for chat in user_messages
+            ) / total_user_messages if total_user_messages > 0 else 0
+            
+            # Calculate completion rate
+            total_questions = len(data.get("questions", []))
+            completion_rate = total_questions / 4 if total_questions > 0 else 0
+            
+            # Prepare the data with additional metadata
+            file_data = {
+                "metadata": {
+                    "candidate_id": candidate_id,
+                    "timestamp": datetime.now().isoformat(),
+                    "version": "1.0"
+                },
+                "candidate_info": {
+                    "full_name": data.get("full_name"),
+                    "email": data.get("email"),
+                    "phone": data.get("phone"),
+                    "experience": data.get("experience"),
+                    "position": data.get("position"),
+                    "location": data.get("location"),
+                    "tech_stack": data.get("tech_stack")
+                },
+                "interview_data": {
+                    "questions": data.get("questions", []),
+                    "chat_history": [
+                        {
+                            "type": chat["type"],
+                            "message": chat["message"],
+                            "timestamp": chat["timestamp"].isoformat(),
+                            "sentiment": self.analyze_sentiment(chat["message"])[0] if chat["type"] == "user" else None,
+                            "evaluation": chat.get("evaluation") if chat["type"] == "user" else None,
+                            "question_asked": chat.get("question_asked") if chat["type"] == "user" else None
+                        }
+                        for chat in data.get("chat_history", [])
+                    ],
+                    "status": data.get("status", "completed"),
+                    "completion_time": data.get("completion_time", datetime.now().isoformat())
+                },
+                "analytics": {
+                    "sentiment_scores": [
+                        {"message": chat["message"], "sentiment": chat["sentiment"]}
+                        for chat in user_messages
+                        if chat.get("sentiment")
+                    ],
+                    "average_score": sum(
+                        chat["evaluation"]["score"]
+                        for chat in user_messages
+                        if chat.get("evaluation") and "score" in chat["evaluation"]
+                    ) / len([
+                        chat for chat in user_messages
+                        if chat.get("evaluation") and "score" in chat["evaluation"]
+                    ]) if [chat for chat in user_messages if chat.get("evaluation") and "score" in chat["evaluation"]] else 0,
+                    "completion_rate": completion_rate,
+                    "average_answer_length": avg_answer_length
+                }
+            }
+            
+            # Save main candidate file
+            candidate_file = os.path.join(candidates_dir, f"candidate_{candidate_id}.json")
+            with open(candidate_file, 'w', encoding='utf-8') as f:
+                json.dump(file_data, f, indent=2, ensure_ascii=False)
+            
+            # Create backup
+            backup_file = os.path.join(backup_dir, f"candidate_{candidate_id}.json")
+            with open(backup_file, 'w', encoding='utf-8') as f:
+                json.dump(file_data, f, indent=2, ensure_ascii=False)
+            
+            # Update analytics
+            analytics_file = os.path.join(analytics_dir, "interview_analytics.json")
+            if os.path.exists(analytics_file):
+                with open(analytics_file, 'r', encoding='utf-8') as f:
+                    analytics_data = json.load(f)
+            else:
+                analytics_data = {"total_interviews": 0, "completed_interviews": 0, "average_completion_rate": 0}
+            
+            # Update analytics
+            analytics_data["total_interviews"] += 1
+            if file_data["interview_data"]["status"] == "completed":
+                analytics_data["completed_interviews"] += 1
+            analytics_data["average_completion_rate"] = (
+                analytics_data["completed_interviews"] / analytics_data["total_interviews"]
+            )
+            
+            # Save updated analytics
+            with open(analytics_file, 'w', encoding='utf-8') as f:
+                json.dump(analytics_data, f, indent=2, ensure_ascii=False)
+            
+            return True, candidate_file
+            
         except Exception as e:
             st.error(f"Error saving data: {e}")
             return False, None
@@ -563,6 +741,9 @@ def main():
             col1, col2 = st.columns([3, 1])
             with col1:
                 if st.button(t('submit_answer'), use_container_width=True, type="primary"):
+                    # Initialize a flag to determine if a rerun is needed
+                    should_rerun = False
+
                     if user_input.strip().lower() in ['end', 'quit', 'stop', 'exit']:
                         st.session_state.stage = 'ended'
                         st.session_state.chat_history.append({
@@ -575,9 +756,11 @@ def main():
                             "message": "Thank you for your time! The interview has been ended at your request. Someone from our team will contact you regarding the next steps.",
                             "timestamp": datetime.now()
                         })
-                        st.rerun()
-                    
-                    if user_input.strip():
+                        should_rerun = True
+                    elif not user_input.strip():
+                        st.warning("Please provide an answer before submitting.")
+                        # No rerun needed here, warning displays, and user can re-type
+                    else: # User provided a non-empty, non-exit input
                         # Add user message to chat
                         st.session_state.chat_history.append({
                             "type": "user",
@@ -586,14 +769,17 @@ def main():
                         })
                         
                         # Evaluate answer
-                        is_adequate, feedback = assistant.evaluate_answer(
+                        is_adequate, feedback, _, evaluation_type = assistant.evaluate_answer(
                             current_q['question'], 
                             user_input, 
                             st.session_state.candidate_data['tech_stack'],
                             language=selected_language
                         )
-                        
+
+                        # Store final evaluation on the question object itself
                         if is_adequate:
+                            st.session_state.questions[st.session_state.current_question]['final_evaluation_type'] = evaluation_type
+                            
                             st.session_state.chat_history.append({
                                 "type": "bot",
                                 "message": feedback,
@@ -601,9 +787,8 @@ def main():
                             })
                             st.session_state.current_question += 1
                             st.session_state.current_question_retries = 0 # Reset retries on adequate answer
-                            
-                            if st.session_state.current_question >= len(st.session_state.questions):
-                                st.session_state.stage = 'completed'
+                            should_rerun = True
+
                         else:
                             st.session_state.current_question_retries += 1
                             if st.session_state.current_question_retries < 2:
@@ -612,8 +797,11 @@ def main():
                                     "message": feedback,
                                     "timestamp": datetime.now()
                                 })
+                                should_rerun = True
                             else:
                                 # Move to next question after 2 failed attempts
+                                st.session_state.questions[st.session_state.current_question]['final_evaluation_type'] = "FAILED_ATTEMPTS"
+
                                 st.session_state.chat_history.append({
                                     "type": "bot",
                                     "message": "Thank you for your response. Let's proceed to the next question.",
@@ -621,13 +809,15 @@ def main():
                                 })
                                 st.session_state.current_question += 1
                                 st.session_state.current_question_retries = 0 # Reset retries for the new question
-
-                                if st.session_state.current_question >= len(st.session_state.questions):
-                                    st.session_state.stage = 'completed'
+                                should_rerun = True
                         
+                    # Check if all questions are completed after potential progression
+                    if st.session_state.current_question >= len(st.session_state.questions) and st.session_state.stage != 'ended':
+                        st.session_state.stage = 'completed'
+                        should_rerun = True # Ensure rerun to transition to completed stage
+
+                    if should_rerun:
                         st.rerun()
-                    else:
-                        st.warning("Please provide an answer before submitting.")
             
             with col2:
                 if st.button(t('end_interview'), use_container_width=True, type="secondary"):
@@ -637,8 +827,8 @@ def main():
                         "message": "Thank you for your time! The interview has been ended. Someone from our team will contact you regarding the next steps.",
                         "timestamp": datetime.now()
                     })
-        st.rerun()
-    
+                    st.rerun() # Rerun immediately for stage change
+        
         # Progress Bar
         if st.session_state.questions:  # Only show progress if questions exist
             progress = st.session_state.current_question / len(st.session_state.questions)
