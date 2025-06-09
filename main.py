@@ -358,6 +358,8 @@ def main():
         st.session_state.questions = []
     if 'interview_started' not in st.session_state:
         st.session_state.interview_started = False
+    if 'current_question_retries' not in st.session_state:
+        st.session_state.current_question_retries = 0
     
     assistant = HiringAssistant()
     
@@ -598,15 +600,30 @@ def main():
                                 "timestamp": datetime.now()
                             })
                             st.session_state.current_question += 1
+                            st.session_state.current_question_retries = 0 # Reset retries on adequate answer
                             
                             if st.session_state.current_question >= len(st.session_state.questions):
                                 st.session_state.stage = 'completed'
                         else:
-                            st.session_state.chat_history.append({
-                                "type": "bot",
-                                "message": feedback,
-                                "timestamp": datetime.now()
-                            })
+                            st.session_state.current_question_retries += 1
+                            if st.session_state.current_question_retries < 2:
+                                st.session_state.chat_history.append({
+                                    "type": "bot",
+                                    "message": feedback,
+                                    "timestamp": datetime.now()
+                                })
+                            else:
+                                # Move to next question after 2 failed attempts
+                                st.session_state.chat_history.append({
+                                    "type": "bot",
+                                    "message": "Thank you for your response. Let's proceed to the next question.",
+                                    "timestamp": datetime.now()
+                                })
+                                st.session_state.current_question += 1
+                                st.session_state.current_question_retries = 0 # Reset retries for the new question
+
+                                if st.session_state.current_question >= len(st.session_state.questions):
+                                    st.session_state.stage = 'completed'
                         
                         st.rerun()
                     else:
